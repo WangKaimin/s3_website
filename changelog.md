@@ -2,6 +2,32 @@
 
 This project uses [Semantic Versioning](http://semver.org).
 
+## 1.7.6
+
+* Remove a test setting from *Gemfile*
+
+## 1.7.5
+
+* Improve significantly the performance of the push command.
+
+    See <https://github.com/laurilehmijoki/s3_website/pull/88> for more info.
+
+## 1.7.4
+
+* Fix issue https://github.com/laurilehmijoki/s3_website/issues/83
+
+## 1.7.3
+
+* Fix Digest::Digest deprecation warn on Ruby 2.1.0
+
+  This warning did appear then one used the `cfg create` or `cfg apply`
+  commands.
+
+## 1.7.2
+
+* This release contains no code changes (the indended change is in the 1.7.3
+  release)
+
 ## 1.7.1
 
 * Do not override ERB when adding CloudFront dist
