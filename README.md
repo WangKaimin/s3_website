@@ -17,15 +17,15 @@
 
     gem install s3_website
 
-`s3_website` requires Ruby. Here is documentation on installing Ruby:
-<http://www.ruby-lang.org/en/downloads/>.
+s3_website needs both [Ruby](https://www.ruby-lang.org/en/downloads/)
+and [Java](http://java.com) to run. (S3_website is partly written in Scala, hence the need for Java.)
 
 ## Usage
 
 Here's how you can get started:
 
 * Create API credentials that have sufficient permissions to S3. More info
-  [here](https://github.com/laurilehmijoki/s3_website/blob/master/additional-docs/setting-up-aws-credentials.md).
+  [here](additional-docs/setting-up-aws-credentials.md).
 * Go to your website directory
 * Run `s3_website cfg create`. This generates a configuration file called `s3_website.yml`.
 * Put your AWS credentials and the S3 bucket name into the file
@@ -33,29 +33,20 @@ Here's how you can get started:
   S3 website. If the bucket does not exist, the command will create it for you.
 * Run `s3_website push` to push your website to S3. Congratulations! You are live.
 
-**Important security note:** if the source code of your website is publicly
-available, ensure that the `s3_website.yml` file is in the list of ignored files.
-For git users this means that the file `.gitignore` should mention the
-`s3_website.yml` file.
+### Specifying the location of your website
 
-### For Jekyll users
+S3_website will automatically discover websites in the *_site* and
+*public/output* directories.
 
-S3_website will automatically discover your website in the *_site* directory.
+If your website is not in either of those directories, you can
+point the location of your website in two ways:
 
-### For Nanoc users
-
-S3_website will automatically discover your website in the *public/output* directory.
-
-### For others
-
-It's a good idea to store the `s3_website.yml` file in your project's root.
-Let's say the contents you wish to upload to your S3 website bucket are in
-*my_website_output*. You can upload the contents of that directory with
-`s3_website push --site my_website_output`.
+1. Add the line `site: path-to-your-website` into the `s3_website.yml` file
+2. Or, use the `--site=path-to-your-site` command-line argument
 
 If you want to store the `s3_website.yml` file in a directory other than
-the project's root you can specify the directory.
-`s3_website push --config_dir config`.
+the project's root you can specify the directory like so:
+`s3_website push --config-dir config`.
 
 ### Using environment variables
 
@@ -71,6 +62,12 @@ s3_bucket: blog.example.com
 roles](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/UsingIAM.html#UsingIAMrolesWithAmazonEC2Instances),
 you can omit the `s3_id` and `s3_secret` keys in the config file.)
 
+S3_website implements supports for reading environment variables from a file using
+the [dotenv](https://github.com/bkeepers/dotenv) gem. You can create a `.env` file
+in the project's root directory to take advantage of this feature. Please have
+a look at [dotenv's usage guide](https://github.com/bkeepers/dotenv#usage) for
+syntax information.
+
 ## Project goals
 
 * Provide a command-line interface tool for deploying and managing S3 websites
@@ -84,7 +81,6 @@ you can omit the `s3_id` and `s3_secret` keys in the config file.)
 * Let the power users benefit from advanced S3 website features such as
   redirects, Cache-Control headers and gzip support
 * Be as fast as possible. Do in parallel all that can be done in parallel.
-* Maintain 90% backward compatibility with the jekyll-s3 gem
 
 `s3_website` attempts to be a command-line interface tool that is easy to
 understand and use. For example, `s3_website --help` should print you all the
@@ -114,6 +110,9 @@ max_age:
 
 Place the configuration into the file `s3_website.yml`.
 
+After changing the `max_age` setting, push with the `--force` option.
+Force-pushing allows you to update the S3 object metadata of existing files.
+
 ### Gzip Compression
 
 If you choose, you can use compress certain file types before uploading them to
@@ -128,7 +127,7 @@ gzip: true
 ```
 
 Note that you can additionally specify the file extensions you want to Gzip
-(`.html`, `.css`, `.js`, and `.txt` will be compressed when `gzip: true`):
+(`.html`, `.css`, `.js`, `.ico`, and `.txt` will be compressed when `gzip: true`):
 
 ```yaml
 gzip:
@@ -140,24 +139,7 @@ gzip:
 Remember that the extensions here are referring to the *compiled* extensions,
 not the pre-processed extensions.
 
-#### Gzip zopfli
-
-By adding the line `gzip_zopfli: true` into the config file, you can benefit
-from the zopfli algorithm, which is 100% compatible with the traditional gzip
-algorithm. A zopfli compression takes longer but results in about 5% smaller
-files.
-
-### Specifying a MIME type for files without extensions
-
-`s3_website` will look up the MIME type of each file it uploads, and infer the Content-Type from it automatically. By default, files without an extension will have a blank Content-Type.
-
-You can specify a default MIME type for files without an extension using a line like this in `s3_website.yml`:
-
-```yaml
-extensionless_mime_type: text/html
-```
-
-This is useful when you are uploading HTML files for which you want 'clean' URLs, e.g. `www.domain.com/info`.
+After changing the `gzip` setting, push with the `--force` option.
 
 ### Using non-standard AWS regions
 
@@ -192,6 +174,9 @@ ignore_on_server:
   - file_managed_by_somebody_else
 ```
 
+If you add the magic word `ignore_on_server: _DELETE_NOTHING_ON_THE_S3_BUCKET_`,
+`s3_website push` will never delete any objects on the bucket.
+
 ### Excluding files from upload
 
 You can instruct `s3_website` not to push certain files:
@@ -216,6 +201,9 @@ You can reduce the cost of hosting your blog on S3 by using Reduced Redundancy S
   * All objects uploaded after this change will use the Reduced Redundancy Storage.
   * If you want to change all of the files in the bucket, you can change them through the AWS console, or update the timestamp on the files before running `s3_website` again
 
+After changing the `s3_reduced_redundancy` setting, push with the `--force`
+option.
+
 ### How to use Cloudfront to deliver your blog
 
 It is easy to deliver your S3-based web site via Cloudfront, the CDN of Amazon.
@@ -226,12 +214,16 @@ When you run the command `s3_website cfg apply`, it will ask you whether you
 want to deliver your website via CloudFront. If you answer yes, the command will
 create a CloudFront distribution for you.
 
+If you do not want to receive this prompt, or if you are running the command in a non-interactive session, you can use `s3_website cfg apply --headless`.
+
 #### Using your existing CloudFront distribution
 
 If you already have a CloudFront distribution that serves data from your website
 S3 bucket, just add the following line into the file `s3_website.yml`:
 
-    cloudfront_distribution_id: your-dist-id
+```yaml
+cloudfront_distribution_id: your-dist-id
+```
 
 Next time you run `s3_website push`, it will invalidate the items on CloudFront and
 thus force the CDN system to reload the changes from your website S3 bucket.
@@ -266,7 +258,9 @@ You can instruct the push command to invalidate the root resource instead of the
 *index.html* resource by adding the following setting into the configuration
 file:
 
-    cloudfront_invalidate_root: true
+```yaml
+cloudfront_invalidate_root: true
+```
 
 To recap, this setting instructs s3_website to invalidate the root resource
 (e.g., *article/*) instead of the filename'd resource (e.g.,
@@ -278,15 +272,6 @@ No more index.htmls in your URLs!
 index file, your source bucket in Cloudfront likely is pointing to the S3 Origin,
 *example.com.s3.amazonaws.com*. Update the source to the S3 Website Endpoint,
 *e.g. example.com.s3-website-us-east-1.amazonaws.com*, to fix this.
-
-### The headless mode
-
-s3_website has a headless mode, where human interactions are disabled.
-
-In the headless mode, `s3_website` will automatically delete the files on the S3
-bucket that are not on your local computer.
-
-Enable the headless mode by adding the `--headless` argument after `s3_website`.
 
 ### Configuring redirects on your S3 website
 
@@ -307,7 +292,7 @@ as key-value pairs under the `redirects` configuration option:
 ```yaml
 redirects:
   index.php: /
-  about.php: about.html
+  about.php: /about.html
   music-files/promo.mp4: http://www.youtube.com/watch?v=dQw4w9WgXcQ
 ```
 
@@ -334,31 +319,24 @@ For more information on configuring redirects, see the documentation of the
 gem, which comes as a transitive dependency of the `s3_website` gem. (The
 command `s3_website cfg apply` internally calls the `configure-s3-website` gem.)
 
-### Using `s3_website` as a library
+#### On skipping application of redirects
 
-By nature, `s3_website` is a command-line interface tool. You can, however, use
-it programmatically by calling the same API as the executable `s3_website` does:
+If your website has a lot of redirects, you may find the following setting
+helpful:
 
-````ruby
-require 's3_website'
-is_headless = true
-S3Website::Tasks.push('/website/root', '/path/to/your/website/_site/', is_headless)
-````
-
-You can also use a basic `Hash` instead of a `s3_website.yml` file:
-
-```ruby
-config = {
-  "s3_id"     => YOUR_AWS_S3_ACCESS_KEY_ID,
-  "s3_secret" => YOUR_AWS_S3_SECRET_ACCESS_KEY,
-  "s3_bucket" => "your.blog.bucket.com"
-}
-in_headless = true
-S3Website::Uploader.run('/path/to/your/website/_site/', config, in_headless)
+```yaml
+treat_zero_length_objects_as_redirects: true
 ```
 
-The code above will assume that you have the `s3_website.yml` in the directory
-`/path/to/your/website`.
+The setting allows `s3_website push` to infer whether a redirect exists on the S3 bucket.
+You will experience faster `push` performance when this setting is `true`.
+
+If this setting is enabled and you modify the `redirects` setting in
+*s3_website.yml*, use `push --force` to apply the modified values.
+
+For backward-compatibility reasons, this setting is `false` by default.
+
+In this context, the word *object* refers to object on S3, not file-system file.
 
 ### Specifying custom concurrency level
 
@@ -368,7 +346,7 @@ HTTP PUT operation against the S3 API, for example.
 You can increase the concurrency level by adding the following setting into the
 `s3_website.yml` file:
 
-```
+```yaml
 concurrency_level: <integer>
 ```
 
@@ -381,18 +359,44 @@ If you experience the "too many open files" error, either increase the amount of
 maximum open files (on Unix-like systems, see `man ulimit`) or decrease the
 `concurrency_level` setting.
 
+### Simulating deployments
+
+You can simulate the `s3_website push` operation by adding the
+`--dry-run` switch. The dry run mode will not apply any modifications on your S3
+bucket or CloudFront distribution. It will merely print out what the `push`
+operation would actually do if run without the dry switch.
+
+You can use the dry run mode if you are unsure what kind of effects the `push`
+operation would cause to your live website.
+
+## Migrating from v1 to v2
+
+Please read the [release note](/changelog.md#200) on version 2. It contains
+information on backward incompatible changes.
+
+You can find the v1 branch
+[here](https://github.com/laurilehmijoki/s3_website/tree/1.x). It's in
+maintenance mode. This means that v1 will see only critical bugfix releases.
+
 ## Example configurations
 
-See
-<https://github.com/laurilehmijoki/s3_website/blob/master/additional-docs/example-configurations.md>.
+See [example-configurations](additional-docs/example-configurations.md).
+
+## On security
+
+If the source code of your website is publicly
+available, ensure that the `s3_website.yml` file is in the list of ignored files.
+For git users this means that the file `.gitignore` should mention the
+`s3_website.yml` file.
+
+If you use the .dotenv gem, ensure that you do not push the `.env` file to a
+public git repository.
 
 ## Known issues
 
 Please create an issue and send a pull request if you spot any.
 
-## Development
-
-### Versioning
+## Versioning
 
 s3_website uses [Semantic Versioning](http://semver.org).
 
@@ -400,10 +404,9 @@ In the spirit of semantic versioning, here is the definition of public API for
 s3_website: Within a major version, s3_website will not break
 backwards-compatibility of anything that is mentioned in this README file.
 
-### Tests
+## Development
 
-  * Install bundler and run `bundle install`
-  * Run all tests by invoking `rake test`
+See [development](additional-docs/development.md).
 
 ### Contributing
 
@@ -419,12 +422,6 @@ If you are not sure how to test your pull request, you can ask the [gem owners
 However, by including proper tests, you increase the chances of your pull
 request being incorporated into future releases.
 
-#### Checklist for new features
-
-* Is it tested?
-* Is it documented in README?
-* Is it mentioned in `resources/configuration_file_template.yml`?
-
 ## License
 
 MIT. See the LICENSE file for more information.
@@ -438,25 +435,36 @@ exist.
 
 Contributors (in alphabetical order)
 * Alan deLevie
+* Almir Sarajčić
+* Andrew T. Baker
 * Cory Kaufman-Schofield
 * Chris Kelly
 * Chris Moos
+* Christian Grobmeier
 * Christopher Petersen
 * David Michael Barr
 * David Raffensperger
+* Douglas Teoh
 * Greg Karékinian
+* Ian Hattendorf
 * John Allison
+* Jon Frisby
 * Jordan White
+* Justin Latimer
 * László Bácsi
 * Mason Turner
 * Michael Bleigh
+* maxberger
 * Philip I. Thomas
 * Philippe Creux
 * Piotr Janik
+* Rodrigo Reis
+* Ross Hunter
 * Shigeaki Matsumura
 * stanislas
 * Tate Johnson
 * Toby Marsden
+* Tom Bell
 * Trevor Fitzgerald
 * Zee Spencer
 

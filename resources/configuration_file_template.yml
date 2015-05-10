@@ -5,6 +5,8 @@ s3_bucket: your.blog.bucket.com
 # Below are examples of all the available configurations.
 # See README for more detailed info on each of them.
 
+# site: path-to-your-website
+
 # max_age:
 #   "assets/*": 6000
 #   "*": 300
@@ -52,5 +54,3 @@ s3_bucket: your.blog.bucket.com
 #       host_name: blog.example.com
 #       replace_key_prefix_with: some_new_path/
 #       http_redirect_code: 301
-
-# extensionless_mime_type: text/html
