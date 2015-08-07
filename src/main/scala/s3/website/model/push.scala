@@ -21,11 +21,11 @@ object Encoding {
   case class Gzip()
   case class Zopfli()
 
-  def encodingOnS3(s3Key: String)(implicit config: Config): Option[Either[Gzip, Zopfli]] =
+  def encodingOnS3(s3Key: S3Key)(implicit config: Config): Option[Either[Gzip, Zopfli]] =
     config.gzip.flatMap { (gzipSetting: Either[Boolean, Seq[String]]) =>
       val shouldZipThisFile = gzipSetting.fold(
-        shouldGzip => defaultGzipExtensions exists s3Key.endsWith,
-        fileExtensions => fileExtensions exists s3Key.endsWith
+        shouldGzip => defaultGzipExtensions exists s3Key.key.endsWith,
+        fileExtensions => fileExtensions exists s3Key.key.endsWith
       )
       if (shouldZipThisFile && config.gzip_zopfli.isDefined)
         Some(Right(Zopfli()))
@@ -71,28 +71,21 @@ case class Upload(originalFile: File, uploadType: UploadType)(implicit site: Sit
       mimeType
   }
 
-  lazy val maxAge: Option[Int] = {
-    type GlobsMap = Map[String, Int]
-    site.config.max_age.flatMap { (intOrGlobs: Either[Int, GlobsMap]) =>
-      type GlobsSeq = Seq[(String, Int)]
-      def respectMostSpecific(globs: GlobsMap): GlobsSeq = globs.toSeq.sortBy(_._1.length).reverse
-      intOrGlobs
-        .right.map(respectMostSpecific)
-        .fold(
-          (seconds: Int) => Some(seconds),
-          (globs: GlobsSeq) => {
-            val matchingMaxAge = (glob: String, maxAge: Int) =>
-              rubyRuntime.evalScriptlet(
-                s"""|# encoding: utf-8
-                    |File.fnmatch('$glob', "$s3Key")""".stripMargin)
-                .toJava(classOf[Boolean])
-                .asInstanceOf[Boolean]
-            val fileGlobMatch = globs find Function.tupled(matchingMaxAge)
-            fileGlobMatch map (_._2)
-          }
-        )
-    }
-  }
+  lazy val maxAge: Option[Int] =
+    site.config.max_age.flatMap(
+      _ fold(
+        (maxAge: Int) => Some(maxAge),
+        (globs: S3KeyGlob[Int]) => globs.globMatch(s3Key)
+      )
+    )
+
+  lazy val cacheControl: Option[String] =
+    site.config.cache_control.flatMap(
+      _ fold(
+        (cacheCtrl: String) => Some(cacheCtrl),
+        (globs: S3KeyGlob[String]) => globs.globMatch(s3Key)
+      )
+    )
 
   /**
    * May throw an exception, so remember to call this in a Try or Future monad
@@ -135,15 +128,11 @@ object Files {
   }
 
   def listSiteFiles(implicit site: Site, logger: Logger) = {
-    def excludeFromUpload(s3Key: String) = {
+    def excludeFromUpload(s3Key: S3Key) = {
       val excludeByConfig = site.config.exclude_from_upload exists {
-        _.fold(
-          // For backward compatibility, use Ruby regex matching
-          (exclusionRegex: String) => rubyRegexMatches(s3Key, exclusionRegex),
-          (exclusionRegexes: Seq[String]) => exclusionRegexes exists (rubyRegexMatches(s3Key, _))
-        )
+        _.s3KeyRegexes.exists(_ matches s3Key)
       }
-      val neverUpload = "s3_website.yml" :: ".env" :: Nil
+      val neverUpload = "s3_website.yml" :: ".env" :: Nil map (k => S3Key.build(k, site.config.s3_key_prefix))
       val doNotUpload = excludeByConfig || (neverUpload contains s3Key)
       if (doNotUpload) logger.debug(s"Excluded $s3Key from upload")
       doNotUpload
@@ -154,11 +143,11 @@ object Files {
   }
 }
 
-case class Redirect(s3Key: String, redirectTarget: String, needsUpload: Boolean) {
+case class Redirect(s3Key: S3Key, redirectTarget: String, needsUpload: Boolean) {
   def uploadType = RedirectFile
 }
 
-private case class RedirectSetting(source: String, target: String)
+private case class RedirectSetting(source: S3Key, target: String)
 
 object Redirect {
   type Redirects = Future[Either[ErrorReport, Seq[Redirect]]]
@@ -168,7 +157,7 @@ object Redirect {
     val redirectSettings = config.redirects.fold(Nil: Seq[RedirectSetting]) { sourcesToTargets =>
       sourcesToTargets.foldLeft(Seq(): Seq[RedirectSetting]) {
         (redirects, sourceToTarget) =>
-          redirects :+ RedirectSetting(sourceToTarget._1, applySlashIfNeeded(sourceToTarget._2))
+          redirects :+ RedirectSetting(sourceToTarget._1, applyRedirectRules(sourceToTarget._2))
       }
     }
     def redirectsWithExistsOnS3Info =
@@ -189,21 +178,22 @@ object Redirect {
       allConfiguredRedirects
   }
 
-  private def applySlashIfNeeded(redirectTarget: String) = {
+  private def applyRedirectRules(redirectTarget: String)(implicit config: Config) = {
     val isExternalRedirect = redirectTarget.matches("https?:\\/\\/.*")
     val isInSiteRedirect = redirectTarget.startsWith("/")
     if (isInSiteRedirect || isExternalRedirect)
       redirectTarget
     else
-      "/" + redirectTarget // let the user have redirect settings like "index.php: index.html" in s3_website.ml
+      s"${config.s3_key_prefix.map(prefix => s"/$prefix").getOrElse("")}/$redirectTarget"
   }
 
   def apply(redirectSetting: RedirectSetting, needsUpload: Boolean): Redirect =
       Redirect(redirectSetting.source, redirectSetting.target, needsUpload)
 }
 
-case class S3File(s3Key: String, md5: MD5, size: Long)
+case class S3File(s3Key: S3Key, md5: MD5, size: Long)
 
 object S3File {
-  def apply(summary: S3ObjectSummary): S3File = S3File(summary.getKey, summary.getETag, summary.getSize)
+  def apply(summary: S3ObjectSummary)(implicit site: Site): S3File =
+    S3File(S3Key.build(summary.getKey, None), summary.getETag, summary.getSize)
 }

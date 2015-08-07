@@ -52,7 +52,7 @@ object S3 {
             (implicit config: Config, s3Settings: S3Setting, pushOptions: PushOptions, executor: ExecutionContextExecutor, logger: Logger):
   Future[Either[FailedDelete, SuccessfulDelete]] =
     Future {
-      if (!pushOptions.dryRun) s3Settings.s3Client(config) deleteObject(config.s3_bucket, s3Key)
+      if (!pushOptions.dryRun) s3Settings.s3Client(config) deleteObject(config.s3_bucket, s3Key.key)
       val report = SuccessfulDelete(s3Key)
       logger.info(report)
       Right(report)
@@ -61,7 +61,7 @@ object S3 {
       retryAction  = newAttempt => this.delete(s3Key, newAttempt)
     )
 
-  def toPutObjectRequest(source: Either[Upload, Redirect])(implicit config: Config): Try[PutObjectRequest] =
+  def toPutObjectRequest(source: Either[Upload, Redirect])(implicit config: Config, logger: Logger): Try[PutObjectRequest] =
     source.fold(
       upload =>
         for {
@@ -72,21 +72,27 @@ object S3 {
           md setContentLength uploadFile.length
           md setContentType contentType
           upload.encodingOnS3.map(_ => "gzip") foreach md.setContentEncoding
-          upload.maxAge foreach { seconds =>
-            md.setCacheControl(
-              if (seconds == 0)
-                s"no-cache; max-age=$seconds"
-              else
-                s"max-age=$seconds"
-            )
+          val cacheControl: Option[String] = (upload.maxAge, upload.cacheControl) match {
+            case (maxAge: Some[Int], cacheCtrl: Some[String]) =>
+              logger.warn("Overriding the max_age setting with the cache_control setting")
+              cacheCtrl
+            case (_, cacheCtrl: Some[String]) =>
+              cacheCtrl
+            case (maxAgeSeconds: Some[int], None) =>
+              maxAgeSeconds.map({
+                case seconds if seconds == 0 => s"no-cache; max-age=0"
+                case seconds                 => s"max-age=$seconds"
+              })
+            case (None, None) => None
           }
-          val req = new PutObjectRequest(config.s3_bucket, upload.s3Key, new FileInputStream(uploadFile), md)
+          cacheControl foreach { md.setCacheControl }
+          val req = new PutObjectRequest(config.s3_bucket, upload.s3Key.key, new FileInputStream(uploadFile), md)
           config.s3_reduced_redundancy.filter(_ == true) foreach (_ => req setStorageClass ReducedRedundancy)
           req
         }
       ,
       redirect => {
-        val req = new PutObjectRequest(config.s3_bucket, redirect.s3Key, redirect.redirectTarget)
+        val req = new PutObjectRequest(config.s3_bucket, redirect.s3Key.key, redirect.redirectTarget)
         req.setMetadata({
           val md = new ObjectMetadata()
           md.setContentLength(0) // Otherwise the AWS SDK will log a warning
@@ -110,21 +116,28 @@ object S3 {
   def awsS3Client(config: Config) = new AmazonS3Client(awsCredentials(config))
 
   def resolveS3Files(nextMarker: Option[String] = None, alreadyResolved: Seq[S3File] = Nil,  attempt: Attempt = 1)
-                              (implicit config: Config, s3Settings: S3Setting, ec: ExecutionContextExecutor, logger: Logger, pushOptions: PushOptions):
+                              (implicit site: Site, s3Settings: S3Setting, ec: ExecutionContextExecutor, logger: Logger, pushOptions: PushOptions):
   Future[Either[ErrorReport, Seq[S3File]]] = Future {
     logger.debug(nextMarker.fold
       ("Querying S3 files")
       {m => s"Querying more S3 files (starting from $m)"}
     )
-    val objects: ObjectListing = s3Settings.s3Client(config).listObjects({
+    val objects: ObjectListing = s3Settings.s3Client(site.config).listObjects({
       val req = new ListObjectsRequest()
-      req.setBucketName(config.s3_bucket)
+      req.setBucketName(site.config.s3_bucket)
       nextMarker.foreach(req.setMarker)
       req
     })
     objects
   } flatMap { (objects: ObjectListing) =>
-    val s3Files = alreadyResolved ++ (objects.getObjectSummaries.toIndexedSeq.toSeq map (S3File(_)))
+
+    /**
+     * We could filter the keys by prefix already on S3, but unfortunately s3_website test infrastructure does not currently support testing of that.
+     * Hence fetch all the keys from S3 and then filter by s3_key_prefix.
+     */
+    def matchesPrefix(os: S3ObjectSummary) = site.config.s3_key_prefix.fold(true)(prefix => os.getKey.startsWith(prefix))
+
+    val s3Files = alreadyResolved ++ (objects.getObjectSummaries.filter(matchesPrefix).toIndexedSeq.toSeq map (S3File(_)))
     Option(objects.getNextMarker)
       .fold(Future(Right(s3Files)): Future[Either[ErrorReport, Seq[S3File]]]) // We've received all the S3 keys from the bucket
       { nextMarker => // There are more S3 keys on the bucket. Fetch them.
@@ -143,7 +156,7 @@ object S3 {
 
   sealed trait PushFailureReport extends ErrorReport
   sealed trait PushSuccessReport extends SuccessReport {
-    def s3Key: String
+    def s3Key: S3Key
   }
 
   case class SuccessfulRedirectDetails(uploadType: UploadType, redirectTarget: String)
@@ -205,15 +218,15 @@ object S3 {
     }
   }
 
-  case class SuccessfulDelete(s3Key: String)(implicit pushOptions: PushOptions) extends PushSuccessReport {
+  case class SuccessfulDelete(s3Key: S3Key)(implicit pushOptions: PushOptions) extends PushSuccessReport {
     def reportMessage = s"${Deleted.renderVerb} $s3Key"
   }
 
-  case class FailedUpload(s3Key: String, error: Throwable)(implicit logger: Logger) extends PushFailureReport {
+  case class FailedUpload(s3Key: S3Key, error: Throwable)(implicit logger: Logger) extends PushFailureReport {
     def reportMessage = errorMessage(s"Failed to upload $s3Key", error)
   }
 
-  case class FailedDelete(s3Key: String, error: Throwable)(implicit logger: Logger) extends PushFailureReport {
+  case class FailedDelete(s3Key: S3Key, error: Throwable)(implicit logger: Logger) extends PushFailureReport {
     def reportMessage = errorMessage(s"Failed to delete $s3Key", error)
   }
 

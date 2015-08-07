@@ -91,8 +91,12 @@ incomprehensible or inconsistent.
 
 ### Cache Control
 
-You can use the `max_age` configuration option to enable more effective browser
-caching of your static assets. There are two possible ways to use the option:
+You can use either the setting `max_age` or `cache_control`to enable more
+effective browser caching of your static assets.
+
+#### max_age
+
+There are two possible ways to use the option:
 you can specify a single age (in seconds) like so:
 
 ```yaml
@@ -108,9 +112,30 @@ max_age:
   "*": 300
 ```
 
-Place the configuration into the file `s3_website.yml`.
-
 After changing the `max_age` setting, push with the `--force` option.
+Force-pushing allows you to update the S3 object metadata of existing files.
+
+#### cache_control
+
+The `cache_control` setting allows you to define an arbitrary string that s3_website
+will put on all the S3 objects of your website.
+
+Here's an example:
+
+```yaml
+cache_control: public, no-transform, max-age=1200, s-maxage=1200
+```
+
+You can also specify a hash of globs, and all files matching those globs will have
+the specified cache-control string:
+
+```yaml
+cache_control:
+  "assets/*": public, max-age=3600
+  "*": no-cache, no-store
+```
+
+After changing the `cache_control` setting, push with the `--force` option.
 Force-pushing allows you to update the S3 object metadata of existing files.
 
 ### Gzip Compression
@@ -156,6 +181,8 @@ s3_endpoint: ap-northeast-1
 
 The valid `s3_endpoint` values consist of the [S3 location constraint
 values](http://docs.amazonwebservices.com/general/latest/gr/rande.html#s3_region).
+
+Note that at the moment s3_website does not support the *eu-central-1* region.
 
 ### Ignoring files you want to keep on AWS
 
@@ -214,7 +241,7 @@ When you run the command `s3_website cfg apply`, it will ask you whether you
 want to deliver your website via CloudFront. If you answer yes, the command will
 create a CloudFront distribution for you.
 
-If you do not want to receive this prompt, or if you are running the command in a non-interactive session, you can use `s3_website cfg apply --headless`.
+If you do not want to receive this prompt, or if you are running the command in a non-interactive session, you can use `s3_website cfg apply --headless` (and optionally also use `--autocreate-cloudfront-dist` if desired).
 
 #### Using your existing CloudFront distribution
 
@@ -296,6 +323,14 @@ redirects:
   music-files/promo.mp4: http://www.youtube.com/watch?v=dQw4w9WgXcQ
 ```
 
+On terminology: the left value is the redirect source and the right value is the redirect
+target. For example above, *about.php* is the redirect source and */about.html* the target.
+
+If the `s3_key_prefix` setting is defined, it will be applied to the redirect
+target if and only if the redirect target points to a site-local resource and
+does not start with a slash. E.g., `about.php: about.html` will be translated
+into `about.php: VALUE-OF-S3_KEY_PREFIX/about.html`.
+
 #### Routing Rules
 
 You can configure more complex redirect rules by adding the following
@@ -368,6 +403,17 @@ operation would actually do if run without the dry switch.
 
 You can use the dry run mode if you are unsure what kind of effects the `push`
 operation would cause to your live website.
+
+### S3 website in a subdirectory of the bucket
+
+If your S3 website shares the same S3 bucket with other applications, you can
+push your website into a "subdirectory" on the bucket.
+
+Define the subdirectory like so:
+
+```yaml
+s3_key_prefix: your-subdirectory
+```
 
 ## Migrating from v1 to v2
 

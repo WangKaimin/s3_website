@@ -1,11 +1,13 @@
 package s3.website.model
 
 import java.io.File
+import java.util
 
+import scala.util.matching.Regex
 import scala.util.{Failure, Try}
 import scala.collection.JavaConversions._
 import s3.website.Ruby.rubyRuntime
-import s3.website.ErrorReport
+import s3.website._
 import com.amazonaws.auth.{AWSCredentialsProvider, BasicAWSCredentials, DefaultAWSCredentialsProviderChain}
 
 case class Config(
@@ -14,15 +16,17 @@ case class Config(
   s3_bucket:                  String,
   s3_endpoint:                S3Endpoint,
   site:                       Option[String],
-  max_age:                    Option[Either[Int, Map[String, Int]]],
+  max_age:                    Option[Either[Int, S3KeyGlob[Int]]],
+  cache_control:              Option[Either[String, S3KeyGlob[String]]],
   gzip:                       Option[Either[Boolean, Seq[String]]],
   gzip_zopfli:                Option[Boolean],
-  ignore_on_server:           Option[Either[String, Seq[String]]],
-  exclude_from_upload:        Option[Either[String, Seq[String]]],
+  s3_key_prefix:              Option[String],
+  ignore_on_server:           Option[S3KeyRegexes],
+  exclude_from_upload:        Option[S3KeyRegexes],
   s3_reduced_redundancy:      Option[Boolean],
   cloudfront_distribution_id: Option[String],
   cloudfront_invalidate_root: Option[Boolean],
-  redirects:                  Option[Map[String, String]],
+  redirects:                  Option[Map[S3Key, String]],
   concurrency_level:          Int,
   treat_zero_length_objects_as_redirects: Option[Boolean]
 )
@@ -55,31 +59,56 @@ object Config {
     yamlValue getOrElse Left(ErrorReport(s"The key $key has to have a boolean or [string] value"))
   }
 
-  def loadOptionalStringOrStringSeq(key: String)(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Either[String, Seq[String]]]] = {
+  def loadOptionalS3KeyRegexes(key: String)(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[S3KeyRegexes]] = {
     val yamlValue = for {
       valueOption <- loadOptionalValue(key)
     } yield {
+      def toS3KeyRegexes(xs: Seq[String]) = S3KeyRegexes(xs map (str => str.r) map S3KeyRegex)
       Right(valueOption.map {
-        case value if value.isInstanceOf[String] => Left(value.asInstanceOf[String])
-        case value if value.isInstanceOf[java.util.List[_]] => Right(value.asInstanceOf[java.util.List[String]].toIndexedSeq)
+        case value if value.isInstanceOf[String] =>
+          toS3KeyRegexes(value.asInstanceOf[String] :: Nil)
+        case value if value.isInstanceOf[java.util.List[_]] =>
+          toS3KeyRegexes(value.asInstanceOf[java.util.List[String]].toIndexedSeq)
       })
     }
 
     yamlValue getOrElse Left(ErrorReport(s"The key $key has to have a string or [string] value"))
   }
 
-  def loadMaxAge(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Either[Int, Map[String, Int]]]] = {
+  def loadMaxAge(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Either[Int, S3KeyGlob[Int]]]] = {
     val key = "max_age"
     val yamlValue = for {
       maxAgeOption <- loadOptionalValue(key)
     } yield {
-      Right(maxAgeOption.map {
-        case maxAge if maxAge.isInstanceOf[Int] => Left(maxAge.asInstanceOf[Int])
-        case maxAge if maxAge.isInstanceOf[java.util.Map[_,_]] => Right(maxAge.asInstanceOf[java.util.Map[String,Int]].toMap)
-      })
-    }
+        // TODO below we are using an unsafe call to asInstance of – we should implement error handling
+        Right(maxAgeOption.map {
+          case maxAge if maxAge.isInstanceOf[Int] =>
+            Left(maxAge.asInstanceOf[Int])
+          case maxAge if maxAge.isInstanceOf[java.util.Map[_,_]] =>
+            val globs: Map[String, Int] = maxAge.asInstanceOf[util.Map[String, Int]].toMap
+            Right(S3KeyGlob(globs))
+        })
+      }
 
     yamlValue getOrElse Left(ErrorReport(s"The key $key has to have an int or (string -> int) value"))
+  }
+
+  def loadCacheControl(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Either[String, S3KeyGlob[String]]]] = {
+    val key = "cache_control"
+    val yamlValue = for {
+      cacheControlOption <- loadOptionalValue(key)
+    } yield {
+        // TODO below we are using an unsafe call to asInstance of – we should implement error handling
+        Right(cacheControlOption.map {
+          case cacheControl if cacheControl.isInstanceOf[String] =>
+            Left(cacheControl.asInstanceOf[String])
+          case cacheControl if cacheControl.isInstanceOf[java.util.Map[_,_]] =>
+            val globs: Map[String, String] = cacheControl.asInstanceOf[util.Map[String, String]].toMap
+            Right(S3KeyGlob(globs))
+        })
+      }
+
+    yamlValue getOrElse Left(ErrorReport(s"The key $key has to have a string or (string -> string) value"))
   }
 
   def loadEndpoint(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[S3Endpoint]] =
@@ -91,12 +120,16 @@ object Config {
       }
     }
 
-  def loadRedirects(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Map[String, String]]] = {
+  def loadRedirects(s3_key_prefix: Option[String])(implicit unsafeYaml: UnsafeYaml): Either[ErrorReport, Option[Map[S3Key, String]]] = {
     val key = "redirects"
     val yamlValue = for {
       redirectsOption <- loadOptionalValue(key)
-      redirects <- Try(redirectsOption.map(_.asInstanceOf[java.util.Map[String,String]].toMap))
-    } yield Right(redirects)
+      redirectsOption <- Try(redirectsOption.map(_.asInstanceOf[java.util.Map[String,String]].toMap))
+    } yield Right(redirectsOption.map(
+        redirects => redirects.map(
+          ((key: String, value: String) => (S3Key.build(key, s3_key_prefix), value)).tupled
+        )
+      ))
 
     yamlValue getOrElse Left(ErrorReport(s"The key $key has to have a (string -> string) value"))
   }

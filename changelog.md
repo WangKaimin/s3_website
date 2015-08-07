@@ -2,6 +2,18 @@
 
 This project uses [Semantic Versioning](http://semver.org).
 
+## 2.11.0
+
+* Add the `s3_key_prefix` setting
+
+## 2.10.0
+
+* Support glob hashes in `cache_control`
+
+## 2.9.0
+
+* Add setting `cache_control`
+
 ## 2.8.6
 
 * Detect changed file even though the file has the same contents with another file on the S3 bucket

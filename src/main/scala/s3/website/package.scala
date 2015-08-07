@@ -1,11 +1,15 @@
 package s3
 
+import s3.website.Ruby._
+
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.concurrent.duration.{TimeUnit, Duration}
 import s3.website.S3.{PushSuccessReport, PushFailureReport}
 import com.amazonaws.AmazonServiceException
 import s3.website.model.{Config, Site}
 import java.io.File
+
+import scala.util.matching.Regex
 
 package object website {
   trait Report {
@@ -52,7 +56,43 @@ package object website {
     def force: Boolean
   }
 
-  type S3Key = String
+  case class S3KeyRegex(keyRegex: Regex) {
+    def matches(s3Key: S3Key) = rubyRegexMatches(s3Key.key, keyRegex.pattern.pattern())
+  }
+
+  trait S3Key {
+    val key: String
+    override def toString = key
+  }
+
+  object S3Key {
+    def prefix(s3_key_prefix: Option[String]) = s3_key_prefix.map(prefix => if (prefix.endsWith("/")) prefix else prefix + "/").getOrElse("")
+
+    def isIgnoredBecauseOfPrefix(s3Key: S3Key)(implicit site: Site) = s3Key.key.startsWith(prefix(site.config.s3_key_prefix))
+
+    case class S3KeyClass(key: String) extends S3Key
+    def build(key: String, s3_key_prefix: Option[String]): S3Key = S3KeyClass(prefix(s3_key_prefix) + key)
+  }
+  
+  case class S3KeyGlob[T](globs: Map[String, T]) {
+    def globMatch(s3Key: S3Key): Option[T] = {
+      def respectMostSpecific(globs: Map[String, T]) = globs.toSeq.sortBy(_._1.length).reverse
+      val matcher = (glob: String, value: T) =>
+        rubyRuntime.evalScriptlet(
+          s"""|# encoding: utf-8
+             |File.fnmatch('$glob', "$s3Key")""".stripMargin)
+          .toJava(classOf[Boolean])
+          .asInstanceOf[Boolean]
+      val fileGlobMatch = respectMostSpecific(globs) find Function.tupled(matcher)
+      fileGlobMatch map (_._2)
+    }
+  }
+  
+  case class S3KeyRegexes(s3KeyRegexes: Seq[S3KeyRegex]) {
+    def matches(s3Key: S3Key) = s3KeyRegexes exists (
+      (keyRegex: S3KeyRegex) => keyRegex matches s3Key
+    )
+  }
 
   type UploadDuration = Long
 
